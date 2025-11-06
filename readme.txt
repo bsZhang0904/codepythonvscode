@@ -44,6 +44,10 @@ python haidian_price_pipeline_v3.py --demo --smooth-ma 6 --phi 0.85
 # 禁用分段线性模型，设置价格下限
 python haidian_price_pipeline_v3.py --demo --no-piecewise --floor-pct 10
 
+方式五：excel的真实数据
+python haidian_price_pipeline_v3.py --excel haidianfangjia.xlsx --smooth-ma 3 --ci --mc-sims 200
+
+
 ###  智能模型选择
 v3版本会自动测试多种模型变体，包括：
 
