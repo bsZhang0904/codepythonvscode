@@ -564,16 +564,15 @@ def forecast_future_prices(
     print(f"年度变化率: {yearly_change:+.2f} ¥/平方米")
     print(f"选择的模型: {cfg['label']}")
     # 一些分段模型返回 (model, breakpoint)，需取第一个元素
-if isinstance(model, tuple):
-    fitted_model = model[0]
-else:
-    fitted_model = model
-
-try:
-    r2 = fitted_model.score(recent[['t']], recent['price_per_sqm'])
-    print(f"模型拟合优度 (R²): {r2:.3f}")
-except Exception as e:
-    print(f"⚠️ 无法计算R²：{e}")
+    if isinstance(model, tuple):
+        fitted_model = model[0]
+    else:
+        fitted_model = model
+    try:
+        r2 = fitted_model.score(recent[['t']], recent['price_per_sqm'])
+        print(f"模型拟合优度 (R²): {r2:.3f}")
+    except Exception as e:
+        print(f"⚠️ 无法计算R²：{e}")
 
     
     # 预测总结
@@ -587,7 +586,6 @@ except Exception as e:
     print(f"预测价格 (2028年底): {predicted_2028_price:,.0f} ¥/平方米")
     print(f"三年总变化: {total_change:+,.0f} ¥/平方米 ({change_percentage:+.1f}%)")
     print(f"年均变化: {yearly_change:+,.0f} ¥/平方米 ({yearly_change/current_avg_price*100:+.1f}%)")
-    
     return forecast_df
 
 # 主函数
