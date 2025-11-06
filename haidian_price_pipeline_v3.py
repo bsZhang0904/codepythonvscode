@@ -12,9 +12,52 @@ import argparse
 from datetime import datetime
 import os
 
-# -----------------------------
+#从Excel真实数据中加载真实海淀房价数据
+def load_real_excel_data(excel_path: str) -> pd.DataFrame:
+    """从Excel加载海淀房价数据（A列=年月，K列=每平米价格，日期格式如2025.08.01）"""
+    df = pd.read_excel(excel_path)
+    possible_date_cols = ["年月", "date", "时间", "month"]
+    possible_price_cols = ["每平方米的价格", "price_per_sqm", "单价", "每平米价格"]
+
+    date_col = next((c for c in possible_date_cols if c in df.columns), df.columns[0])
+    price_col = next((c for c in possible_price_cols if c in df.columns), df.columns[-1])
+
+    # ---- 🔧 日期解析增强 ----
+    df["date_raw"] = df[date_col].astype(str).str.strip()
+    # 统一替换各种符号并尝试多种解析格式
+    df["date_clean"] = (
+        df["date_raw"]
+        .str.replace("年", "-")
+        .str.replace("月", "-")
+        .str.replace("日", "")
+        .str.replace("/", "-")
+        .str.replace(".", "-")
+    )
+
+    # 主动声明格式 "%Y-%m-%d" 并忽略无效值
+    df["date"] = pd.to_datetime(df["date_clean"], format="%Y-%m-%d", errors="coerce")
+
+    # 去除无效日期
+    df = df.dropna(subset=["date"])
+
+    # ---- 🔢 价格列 ----
+    df["price_per_sqm"] = pd.to_numeric(df[price_col], errors="coerce")
+    df = df.dropna(subset=["price_per_sqm"])
+
+    # ---- 📆 按月聚合 ----
+    df["year_month"] = df["date"].dt.to_period("M").dt.to_timestamp()
+    monthly = df.groupby("year_month")["price_per_sqm"].mean().reset_index()
+    monthly = monthly.rename(columns={"year_month": "date"})
+
+    print(f"✅ 成功加载Excel数据，共 {len(monthly)} 个月")
+    print(f"时间范围：{monthly['date'].min().date()} - {monthly['date'].max().date()}")
+    print("前5个月样例：")
+    print(monthly.head())
+
+    return monthly
+
+
 # 数据生成（模拟海淀区房价数据）- 精确控制时间范围
-# -----------------------------
 def generate_synthetic_data(n_samples=2000, random_state=42):
     np.random.seed(random_state)
     area = np.random.normal(90, 20, n_samples).clip(30, 200)
@@ -27,9 +70,9 @@ def generate_synthetic_data(n_samples=2000, random_state=42):
     lon = np.random.normal(116.33, 0.02, n_samples)
     neigh_price = np.random.normal(90000, 8000, n_samples)
     
-    # 精确控制日期范围：2015-01-01 到 2025-12-31
-    start_date = "2015-01-01"
-    end_date = "2025-12-31"
+    # 精确控制日期范围：2019-01-01 到 2025-08-01
+    start_date = "2019-01-01"
+    end_date = "2025-08-01"
     date = pd.date_range(start=start_date, end=end_date, periods=n_samples)
 
     # price 模型
@@ -48,7 +91,7 @@ def generate_synthetic_data(n_samples=2000, random_state=42):
             "area": area,
             "rooms": rooms,
             "floor": floor,
-            "year_built": year_built,
+            #"year_built": year_built,
             "dist_metro_m": dist_metro_m,
             "school_rank": school_rank,
             "lat": lat,
@@ -60,9 +103,8 @@ def generate_synthetic_data(n_samples=2000, random_state=42):
     )
     return data
 
-# -----------------------------
+
 # 月度均价加载（来自 CSV year_month, avg_price_per_sqm）
-# -----------------------------
 def load_monthly_prices(csv_path: str) -> pd.DataFrame:
     """将月度均价CSV转换为包含 date 与 price_per_sqm 的DataFrame。
 
@@ -77,9 +119,7 @@ def load_monthly_prices(csv_path: str) -> pd.DataFrame:
     monthly = monthly.rename(columns={"avg_price_per_sqm": "price_per_sqm"})
     return monthly[["date", "price_per_sqm"]]
 
-# -----------------------------
 # 模型训练与评估函数
-# -----------------------------
 def train_and_evaluate_models(df):
     X = df[["area", "rooms", "floor", "year_built", "dist_metro_m", "school_rank", "lat", "lon", "neigh_price"]]
     y = df["price_per_sqm"]
@@ -122,9 +162,8 @@ def train_and_evaluate_models(df):
     print(f"Best model by RMSE: {best_model}")
     return results, best_model
 
-# -----------------------------
+
 # 优化后的时间序列房价预测函数 - 精确控制预测起点
-# -----------------------------
 def forecast_future_prices(
     df,
     years_forward=3,
@@ -524,7 +563,18 @@ def forecast_future_prices(
     print(f"月度变化率: {monthly_change:+.2f} ¥/平方米")
     print(f"年度变化率: {yearly_change:+.2f} ¥/平方米")
     print(f"选择的模型: {cfg['label']}")
-    print(f"模型拟合优度 (R²): {model.score(recent[['t']], recent['price_per_sqm']):.3f}")
+    # 一些分段模型返回 (model, breakpoint)，需取第一个元素
+if isinstance(model, tuple):
+    fitted_model = model[0]
+else:
+    fitted_model = model
+
+try:
+    r2 = fitted_model.score(recent[['t']], recent['price_per_sqm'])
+    print(f"模型拟合优度 (R²): {r2:.3f}")
+except Exception as e:
+    print(f"⚠️ 无法计算R²：{e}")
+
     
     # 预测总结
     current_avg_price = recent["price_per_sqm"].iloc[-1]  # 2025年底价格
@@ -540,9 +590,7 @@ def forecast_future_prices(
     
     return forecast_df
 
-# -----------------------------
 # 主函数
-# -----------------------------
 def main_demo():
     print("生成2015-2025年海淀区房价模拟数据...")
     df = generate_synthetic_data()
@@ -565,13 +613,13 @@ def main_demo():
 
     print(f"\n演示完成。当前分析基于真实的2025年时间线。")
 
-# -----------------------------
+
 # 入口
-# -----------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--demo", action="store_true", help="Run demo with synthetic data")
     parser.add_argument("--file", type=str, help="Path to real CSV data (date, price_per_sqm required)")
+    parser.add_argument("--excel", type=str, help="Path to Excel file with Haidian housing data")  # ✅ 新增
     parser.add_argument("--use-builtin", action="store_true", help="Use builtin monthly CSV data")
     parser.add_argument("--monthly-file", type=str, help="Path to monthly CSV (year_month, avg_price_per_sqm)")
     parser.add_argument("--no-piecewise", action="store_true", help="禁用分段线性候选")
@@ -585,8 +633,15 @@ if __name__ == "__main__":
     parser.add_argument("--upturn-horizon", type=int, default=12, help="回升概率评估的月份，默认 12")
     args = parser.parse_args()
 
+    # ---------------------
+    # 模式1：演示模式（使用模拟数据）
+    # ---------------------
     if args.demo:
         main_demo()
+
+    # ---------------------
+    # 模式2：CSV 文件（包含 date, price_per_sqm）
+    # ---------------------
     elif args.file:
         df = pd.read_csv(args.file, parse_dates=["date"])
         results, best_model = train_and_evaluate_models(df)
@@ -602,18 +657,73 @@ if __name__ == "__main__":
             mc_sims=args.mc_sims,
             upturn_horizon=args.upturn_horizon,
         )
+
+        # ---------------------
+    # ✅ 模式3：Excel 文件（如 haidianfangjia.xlsx）
+    # ---------------------
+    elif args.excel:
+        def load_real_excel_data(excel_path: str) -> pd.DataFrame:
+            """从Excel加载海淀房价数据（A列=年月, K列=每平米价格，日期格式形如2025.08.01）"""
+            df = pd.read_excel(excel_path)
+            
+            # 明确A列和K列
+            date_col = df.columns[0]   # 假定A列为年月
+            price_col = df.columns[10] # 假定K列为每平方米价格（从0计数）
+
+            # ---- 🔧 日期解析 ----
+            df["date_str"] = df[date_col].astype(str).str.strip()
+            # 将 "2025.08.01" 转换成 pandas 可识别格式
+            df["date_str"] = df["date_str"].str.replace(".", "-", regex=False)
+            df["date"] = pd.to_datetime(df["date_str"], format="%Y-%m-%d", errors="coerce")
+            df = df.dropna(subset=["date"])
+
+            # ---- 🔢 价格列 ----
+            df["price_per_sqm"] = pd.to_numeric(df[price_col], errors="coerce")
+            df = df.dropna(subset=["price_per_sqm"])
+
+            # ---- 📆 按月聚合 ----
+            df["year_month"] = df["date"].dt.to_period("M").dt.to_timestamp()
+            monthly = df.groupby("year_month")["price_per_sqm"].mean().reset_index()
+            monthly = monthly.rename(columns={"year_month": "date"})
+
+            print(f"✅ 成功加载Excel数据，共 {len(monthly)} 个月")
+            if len(monthly) > 0:
+                print(f"时间范围：{monthly['date'].min().date()} - {monthly['date'].max().date()}")
+                print("前5个月样例：")
+                print(monthly.head())
+            else:
+                print("⚠️ 未解析出有效数据，请检查A列是否为日期，K列是否为价格")
+            return monthly
+
+        excel_df = load_real_excel_data(args.excel)
+        if len(excel_df) == 0:
+            print("❌ 无法继续：未从Excel中读取到有效数据。")
+        else:
+            forecast_future_prices(
+                excel_df,
+                piecewise=not args.no_piecewise,
+                damped=not args.no_damped,
+                phi=args.phi,
+                smooth_ma=args.smooth_ma,
+                ci=args.ci,
+                ci_level=args.ci_level,
+                floor_pct=args.floor_pct,
+                mc_sims=args.mc_sims,
+                upturn_horizon=args.upturn_horizon,
+            )
+
+
+    # ---------------------
+    # 模式4：内置月度CSV
+    # ---------------------
     elif args.use_builtin or args.monthly_file:
         csv_path = args.monthly_file
         if args.use_builtin and not csv_path:
             csv_path = os.path.join(os.path.dirname(__file__), "data", "haidian_monthly_prices_2015_2025.csv")
         monthly_df = load_monthly_prices(csv_path)
-        # 直接基于月度数据进行趋势预测（训练函数需按结构要求，这里只做趋势预测）
-        # 若需要与上方回归模型统一接口，可合成伪特征。这里走轻量趋势预测路径：
         monthly_df = monthly_df.sort_values("date")
         monthly_df["year_month"] = monthly_df["date"]
-        # 为兼容 forecast_future_prices 接口，构造最小字段集合
         df_for_forecast = monthly_df.rename(columns={"price_per_sqm": "price_per_sqm"})
-        # forecast_future_prices 需要列名: date, price_per_sqm
         forecast_future_prices(
             df_for_forecast,
             piecewise=not args.no_piecewise,
@@ -626,5 +736,9 @@ if __name__ == "__main__":
             mc_sims=args.mc_sims,
             upturn_horizon=args.upturn_horizon,
         )
+
     else:
-        print("No arguments provided. Run with --demo to execute demo or --file <csv>")
+        print("未提供数据源。请使用以下任一方式运行：")
+        print("  python haidian_price_pipeline_v3.py --demo")
+        print("  python haidian_price_pipeline_v3.py --excel haidianfangjia.xlsx")
+        print("  python haidian_price_pipeline_v3.py --file data.csv")
